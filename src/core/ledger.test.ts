@@ -18,11 +18,7 @@ function entry(partial: Partial<Entry>): Entry {
 
 const cases: Array<[string, Entry, boolean]> = [
   ["clean sale is accepted", entry({}), true],
-  [
-    "model dropping a zero is caught",
-    entry({ total_minor: 450_000 }),
-    false,
-  ],
+  ["model dropping a zero is caught", entry({ total_minor: 450_000 }), false],
   [
     "unit price that does not multiply out is caught",
     entry({ unit_price_minor: 200_000, total_minor: 4_500_000 }),
@@ -34,6 +30,16 @@ const cases: Array<[string, Entry, boolean]> = [
     true,
   ],
   ["low confidence is asked back", entry({ confidence: 0.4 }), false],
+  [
+    "total stated as a per-unit product is accepted",
+    entry({ source_text: "20 bags at 2,250 each", quantity: 20, unit_price_minor: 225_000, total_minor: 4_500_000 }),
+    true,
+  ],
+  [
+    "total the trader never said is caught",
+    entry({ source_text: "I sell twenty bag of rice for forty-five thousand", total_minor: 9_900_000 }),
+    false,
+  ],
 ];
 
 let failed = 0;

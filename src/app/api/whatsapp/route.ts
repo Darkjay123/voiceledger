@@ -1,6 +1,10 @@
 import { NextRequest } from "next/server";
 import { extractEntries } from "@/core/extract";
-import { checkEntry, formatNaira } from "@/core/ledger";
+import { extractFromPhoto } from "@/core/vision";
+import { transcribeVoiceNote } from "@/core/transcribe";
+import { downloadMedia } from "@/core/media";
+import { checkEntry, formatNaira, type Check } from "@/core/ledger";
+import type { Extraction } from "@/core/schema";
 
 /**
  * WhatsApp Cloud API webhook.
@@ -34,8 +38,10 @@ export async function POST(req: NextRequest) {
 
 type WhatsAppMessage = {
   from: string;
-  type: "text" | "audio" | "image" | string;
+  type: string;
   text?: { body: string };
+  audio?: { id: string };
+  image?: { id: string };
 };
 
 async function handle(body: any) {
@@ -43,37 +49,74 @@ async function handle(body: any) {
     body?.entry?.[0]?.changes?.[0]?.value?.messages ?? [];
 
   for (const message of messages) {
-    // Voice notes and sales-book photos land in the next commit; text first so
-    // the ledger path is provable end to end without a media download.
-    if (message.type !== "text" || !message.text?.body) continue;
+    try {
+      const read = await readMessage(message);
+      if (!read) continue;
 
-    const extraction = await extractEntries(message.text.body);
-    const checks = extraction.entries.map(checkEntry);
-
-    const accepted = checks.filter((c) => c.accepted);
-    const questions = checks.filter((c) => !c.accepted).map((c) => c.question!);
-
-    await sendReply(message.from, composeReply(accepted.length, questions, accepted));
+      const checks = read.extraction.entries.map(checkEntry);
+      await sendReply(message.from, composeReply(checks, read.heard));
+    } catch (err) {
+      console.error("message failed", err);
+      await sendReply(
+        message.from,
+        "Sorry, I couldn't read that one. Send it again and I'll try once more.",
+      );
+    }
   }
 }
 
-function composeReply(
-  savedCount: number,
-  questions: string[],
-  accepted: ReturnType<typeof checkEntry>[],
-): string {
-  const lines: string[] = [];
+type ReadMessage = {
+  extraction: Extraction;
+  /** What we understood the trader to have said, echoed back on voice notes. */
+  heard: string | null;
+};
 
-  for (const { entry } of accepted) {
-    const verb = entry.direction === "sale" ? "Sold" : entry.direction === "purchase" ? "Bought" : "Spent";
-    const qty = entry.quantity ? `${entry.quantity} ${entry.unit ?? ""} ` : "";
-    lines.push(`${verb} ${qty}${entry.item} — ${formatNaira(entry.total_minor)}`.replace(/\s+/g, " "));
+async function readMessage(message: WhatsAppMessage): Promise<ReadMessage | null> {
+  if (message.type === "text" && message.text?.body) {
+    return { extraction: await extractEntries(message.text.body), heard: null };
   }
 
-  if (savedCount > 0) lines.push(savedCount === 1 ? "Saved." : `Saved ${savedCount} entries.`);
+  if (message.type === "audio" && message.audio?.id) {
+    const media = await downloadMedia(message.audio.id);
+    const transcript = await transcribeVoiceNote(media);
+    if (!transcript) return null;
+    // Echo the transcript back. A trader who can hear what we heard can catch
+    // a misread before it becomes a wrong number in her books.
+    return { extraction: await extractEntries(transcript), heard: transcript };
+  }
+
+  if (message.type === "image" && message.image?.id) {
+    const media = await downloadMedia(message.image.id);
+    return { extraction: await extractFromPhoto(media), heard: null };
+  }
+
+  return null;
+}
+
+function composeReply(checks: Check[], heard: string | null): string {
+  const accepted = checks.filter((c) => c.accepted);
+  const questions = checks.filter((c) => !c.accepted).map((c) => c.question!);
+
+  const lines: string[] = [];
+  if (heard) lines.push(`Heard: "${heard}"`);
+
+  for (const { entry } of accepted) {
+    const verb =
+      entry.direction === "sale" ? "Sold" : entry.direction === "purchase" ? "Bought" : "Spent";
+    const qty = entry.quantity ? `${entry.quantity} ${entry.unit ?? ""} ` : "";
+    lines.push(`${verb} ${qty}${entry.item}: ${formatNaira(entry.total_minor)}`.replace(/\s+/g, " "));
+  }
+
+  if (accepted.length > 0) {
+    lines.push(accepted.length === 1 ? "Saved." : `Saved ${accepted.length} entries.`);
+  }
+
   lines.push(...questions);
 
-  return lines.join("\n") || "I didn't catch a sale in that. Try telling me what you sold and for how much.";
+  return (
+    lines.join("\n") ||
+    "I didn't catch a sale in that. Tell me what you sold and for how much, or send a photo of your book."
+  );
 }
 
 async function sendReply(to: string, text: string) {

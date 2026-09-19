@@ -38,16 +38,27 @@ function tokenize(input: string): string[] {
 }
 
 /**
- * Parse the first number expressed in a token run, mixing digits and words
- * freely: "45k", "forty five thousand", "2 hundred and fifty" all work.
- * Returns null when the run holds no number.
+ * Parse every number expressed in a message, mixing digits and words freely.
+ * "I sell twenty bag of rice for forty-five thousand" gives [20, 45000].
+ *
+ * We need all of them, not the first: checking the model's total against only
+ * the leading number lets a dropped zero through whenever the total happens to
+ * match the quantity instead.
  */
-export function parseSpokenNumber(input: string): number | null {
+export function parseSpokenNumbers(input: string): number[] {
   const tokens = tokenize(input);
+  const found: number[] = [];
 
   let total = 0;
   let current = 0;
   let seen = false;
+
+  const flush = () => {
+    if (seen) found.push(total + current);
+    total = 0;
+    current = 0;
+    seen = false;
+  };
 
   for (const raw of tokens) {
     // "45k" / "2m" arrive glued together.
@@ -86,10 +97,16 @@ export function parseSpokenNumber(input: string): number | null {
 
     if (token === "and" || token === "naira") continue;
 
-    // Any other word ends the number run, but only once we have something.
-    if (seen) break;
+    // Any other word closes the current number and starts looking for the next.
+    flush();
   }
 
-  if (!seen) return null;
-  return total + current;
+  flush();
+  return found;
+}
+
+/** The first number in the message, or null when it holds none. */
+export function parseSpokenNumber(input: string): number | null {
+  const all = parseSpokenNumbers(input);
+  return all.length ? all[0] : null;
 }
