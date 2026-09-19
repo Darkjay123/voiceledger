@@ -6,9 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "tsx src/core/amount.test.ts && tsx src/core/ledger.test.ts"
+    "test": "tsx src/core/amount.test.ts && tsx src/core/ledger.test.ts && tsx src/core/question.test.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.46.1",
     "next": "^15.0.0",
     "openai": "^4.73.0",
     "react": "^19.0.0",

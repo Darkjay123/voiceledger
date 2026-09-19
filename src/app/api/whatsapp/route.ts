@@ -4,6 +4,8 @@ import { extractFromPhoto } from "@/core/vision";
 import { transcribeVoiceNote } from "@/core/transcribe";
 import { downloadMedia } from "@/core/media";
 import { checkEntry, formatNaira, type Check } from "@/core/ledger";
+import { resolveTrader, saveEntries } from "@/core/db";
+import { answerQuestion } from "@/core/answer";
 import type { Extraction } from "@/core/schema";
 
 /**
@@ -44,6 +46,8 @@ type WhatsAppMessage = {
   image?: { id: string };
 };
 
+type SourceKind = "text" | "voice" | "photo";
+
 async function handle(body: any) {
   const messages: WhatsAppMessage[] =
     body?.entry?.[0]?.changes?.[0]?.value?.messages ?? [];
@@ -53,7 +57,20 @@ async function handle(body: any) {
       const read = await readMessage(message);
       if (!read) continue;
 
+      const traderId = await resolveTrader(message.from);
+
+      if (read.extraction.question) {
+        await sendReply(message.from, await answerQuestion(traderId, read.extraction.question));
+        continue;
+      }
+
       const checks = read.extraction.entries.map(checkEntry);
+      const accepted = checks.filter((c) => c.accepted).map((c) => c.entry);
+
+      // Only entries that survived the arithmetic check are written down. The
+      // rest come back as a question and are recorded once she answers.
+      await saveEntries(traderId, accepted, read.sourceKind);
+
       await sendReply(message.from, composeReply(checks, read.heard));
     } catch (err) {
       console.error("message failed", err);
@@ -67,13 +84,18 @@ async function handle(body: any) {
 
 type ReadMessage = {
   extraction: Extraction;
+  sourceKind: SourceKind;
   /** What we understood the trader to have said, echoed back on voice notes. */
   heard: string | null;
 };
 
 async function readMessage(message: WhatsAppMessage): Promise<ReadMessage | null> {
   if (message.type === "text" && message.text?.body) {
-    return { extraction: await extractEntries(message.text.body), heard: null };
+    return {
+      extraction: await extractEntries(message.text.body),
+      sourceKind: "text",
+      heard: null,
+    };
   }
 
   if (message.type === "audio" && message.audio?.id) {
@@ -82,12 +104,16 @@ async function readMessage(message: WhatsAppMessage): Promise<ReadMessage | null
     if (!transcript) return null;
     // Echo the transcript back. A trader who can hear what we heard can catch
     // a misread before it becomes a wrong number in her books.
-    return { extraction: await extractEntries(transcript), heard: transcript };
+    return {
+      extraction: await extractEntries(transcript),
+      sourceKind: "voice",
+      heard: transcript,
+    };
   }
 
   if (message.type === "image" && message.image?.id) {
     const media = await downloadMedia(message.image.id);
-    return { extraction: await extractFromPhoto(media), heard: null };
+    return { extraction: await extractFromPhoto(media), sourceKind: "photo", heard: null };
   }
 
   return null;
