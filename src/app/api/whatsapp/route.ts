@@ -71,7 +71,7 @@ async function handle(body: any) {
       // rest come back as a question and are recorded once she answers.
       await saveEntries(traderId, accepted, read.sourceKind);
 
-      await sendReply(message.from, composeReply(checks, read.heard));
+      await sendReply(message.from, composeReply(checks, read.heard, read.unsureAbout));
     } catch (err) {
       console.error("message failed", err);
       await sendReply(
@@ -87,6 +87,11 @@ type ReadMessage = {
   sourceKind: SourceKind;
   /** What we understood the trader to have said, echoed back on voice notes. */
   heard: string | null;
+  /**
+   * Money words the model was not sure it heard. The reply asks about these
+   * instead of writing a half-heard number into somebody's books.
+   */
+  unsureAbout?: string[];
 };
 
 async function readMessage(message: WhatsAppMessage): Promise<ReadMessage | null> {
@@ -101,13 +106,27 @@ async function readMessage(message: WhatsAppMessage): Promise<ReadMessage | null
   if (message.type === "audio" && message.audio?.id) {
     const media = await downloadMedia(message.audio.id);
     const transcript = await transcribeVoiceNote(media);
-    if (!transcript) return null;
+    if (!transcript.text) return null;
+
+    // Keep the id. It is what AssemblyAI needs to retry, refetch or delete a
+    // transcript, and the first thing their support asks for.
+    console.log(
+      JSON.stringify({
+        at: new Date().toISOString(),
+        assemblyai_transcript_id: transcript.transcriptId,
+        confidence: transcript.confidence,
+        audio_seconds: transcript.audioDuration,
+        doubtful_amounts: transcript.doubtfulAmounts.map((w) => w.text),
+      }),
+    );
+
     // Echo the transcript back. A trader who can hear what we heard can catch
     // a misread before it becomes a wrong number in her books.
     return {
-      extraction: await extractEntries(transcript),
+      extraction: await extractEntries(transcript.text),
       sourceKind: "voice",
-      heard: transcript,
+      heard: transcript.text,
+      unsureAbout: transcript.doubtfulAmounts.map((w) => w.text),
     };
   }
 
@@ -119,7 +138,11 @@ async function readMessage(message: WhatsAppMessage): Promise<ReadMessage | null
   return null;
 }
 
-function composeReply(checks: Check[], heard: string | null): string {
+function composeReply(
+  checks: Check[],
+  heard: string | null,
+  unsureAbout: string[] = [],
+): string {
   const accepted = checks.filter((c) => c.accepted);
   const questions = checks.filter((c) => !c.accepted).map((c) => c.question!);
 
@@ -138,6 +161,12 @@ function composeReply(checks: Check[], heard: string | null): string {
   }
 
   lines.push(...questions);
+
+  // A number we only half-heard is not a number. Ask rather than book it.
+  if (unsureAbout.length > 0) {
+    const heardAs = unsureAbout.map((w) => `"${w}"`).join(", ");
+    lines.push(`The line was noisy around ${heardAs}. Type that amount so I book it right.`);
+  }
 
   return (
     lines.join("\n") ||

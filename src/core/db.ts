@@ -53,6 +53,60 @@ export async function saveEntries(
   if (error) throw new Error(`could not save entries: ${error.message}`);
 }
 
+export type TraderRow = {
+  id: string;
+  whatsapp_id: string;
+  display_name: string | null;
+};
+
+/** Every trader on the service, newest first. The dashboard picks one of these. */
+export async function listTraders(): Promise<TraderRow[]> {
+  const { data, error } = await supabase
+    .from("traders")
+    .select("id, whatsapp_id, display_name")
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(`could not list traders: ${error.message}`);
+  return (data ?? []) as TraderRow[];
+}
+
+export type EntryRow = {
+  id: string;
+  direction: Entry["direction"];
+  item: string;
+  quantity: number | null;
+  unit: string | null;
+  unit_price_minor: number | null;
+  total_minor: number;
+  confidence: number;
+  source_text: string;
+  source_kind: "text" | "voice" | "photo";
+  occurred_at: string;
+};
+
+/**
+ * The trader's latest entries, newest first.
+ *
+ * source_text rides along deliberately: the dashboard shows her own words next
+ * to every figure, so a wrong number is visible without opening anything.
+ */
+export async function recentEntries(
+  traderId: string,
+  limit = 12,
+): Promise<EntryRow[]> {
+  const { data, error } = await supabase
+    .from("entries")
+    .select(
+      "id, direction, item, quantity, unit, unit_price_minor, total_minor, confidence, source_text, source_kind, occurred_at",
+    )
+    .eq("trader_id", traderId)
+    .order("occurred_at", { ascending: false })
+    .limit(limit);
+
+  if (error) throw new Error(`could not read entries: ${error.message}`);
+  return (data ?? []) as EntryRow[];
+}
+
 export type Summary = {
   since: Date;
   salesMinor: number;

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "tsx src/core/amount.test.ts && tsx src/core/ledger.test.ts && tsx src/core/question.test.ts"
+    "test": "tsx src/core/amount.test.ts && tsx src/core/ledger.test.ts && tsx src/core/question.test.ts && tsx src/core/transcribe.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.46.1",
